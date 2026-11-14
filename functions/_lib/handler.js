@@ -69,7 +69,9 @@ export async function handleRequest(context) {
 
   const cacheOptions = buildCacheOptions(request, upstreamUrl, route.registry, env);
   const upstreamResponse = await fetchAndNormalize(upstreamRequest, requestUrl, route, env, cacheOptions);
-  return withCors(addProxyHeaders(upstreamResponse, route.registry, upstreamUrl));
+  return withCors(
+    addProxyHeaders(upstreamResponse, route.registry, upstreamUrl, request.headers.has("Authorization")),
+  );
 }
 
 function shouldServeAsset(requestUrl, request) {
