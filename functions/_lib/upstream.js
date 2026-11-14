@@ -52,7 +52,7 @@ export async function fetchAndNormalize(upstreamRequest, originalUrl, route, env
   });
 }
 
-export function addProxyHeaders(response, registry, upstreamUrl = null) {
+export function addProxyHeaders(response, registry, upstreamUrl = null, isAuthenticated = false) {
   const headers = new Headers(response.headers);
   const ttl = upstreamUrl ? getCacheTtl(upstreamUrl) : 0;
 
@@ -61,7 +61,14 @@ export function addProxyHeaders(response, registry, upstreamUrl = null) {
   headers.set("X-Registry-Cache", headers.get("CF-Cache-Status") || "DYNAMIC");
 
   if (ttl > 0 && isCacheableResponse(response)) {
-    headers.set("Cache-Control", `public, max-age=${ttl}`);
+    // Authenticated responses may carry private repository data. The edge
+    // already skips caching them, but advertising them as publicly
+    // cacheable would let a downstream shared cache store them. Mark them
+    // private instead of public.
+    headers.set(
+      "Cache-Control",
+      isAuthenticated ? "private, no-store" : `public, max-age=${ttl}`,
+    );
   }
 
   return new Response(response.body, {
