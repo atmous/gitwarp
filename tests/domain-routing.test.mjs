@@ -393,7 +393,10 @@ test("GitHub source cache does not store cold Range responses", async () => {
       waitUntil: (task) => backgroundTasks.push(task),
     });
 
-    assert.equal(matchedRequest.headers.get("Range"), "bytes=0-0");
+    // Range requests skip the cache entirely (no read, no write): the cache
+    // only holds complete 200 responses, and a cached full body must never
+    // be served for a Range request.
+    assert.equal(matchedRequest, undefined);
     assert.equal(response.status, 206);
     assert.equal(await response.text(), "r");
     assert.equal(backgroundTasks.length, 0);
@@ -444,5 +447,83 @@ test("GitHub source cache failures fall back to the upstream response", async ()
     } else {
       globalThis.caches = originalCaches;
     }
+  }
+});
+
+test("GitHub source Range requests bypass the cache so upstream answers 206", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+
+  // The cache only ever stores complete 200 responses. A cached full body
+  // must not be served for a Range request: the client asked for a slice
+  // and would get a 200 full body instead of a 206 partial response,
+  // which corrupts resumable downloads.
+  globalThis.caches = {
+    default: {
+      match: async () =>
+        new Response("0123456789ABCDEF", {
+          status: 200,
+          headers: { "Content-Length": "16", "Content-Type": "text/plain" },
+        }),
+      put: async () => assert.fail("Range responses must not be cached"),
+    },
+  };
+  globalThis.fetch = async () =>
+    new Response("012345", {
+      status: 206,
+      headers: {
+        "Content-Length": "6",
+        "Content-Range": "bytes 0-5/16",
+        "Content-Type": "text/plain",
+      },
+    });
+
+  try {
+    const response = await request(
+      "https://mirror.example.com/raw.githubusercontent.com/owner/repo/main/file.txt",
+      { headers: { Range: "bytes=0-5" } },
+    );
+
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get("Content-Range"), "bytes 0-5/16");
+    assert.equal(await response.text(), "012345");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalCaches === undefined) {
+      delete globalThis.caches;
+    } else {
+      globalThis.caches = originalCaches;
+    }
+  }
+});
+
+test("authenticated registry responses are not advertised as publicly cacheable", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () =>
+    new Response('{"schemaVersion":2}', {
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.docker.distribution.manifest.v2+json",
+      },
+    });
+
+  try {
+    const authed = await request("https://mirror.example.com/v2/library/alpine/manifests/latest", {
+      headers: {
+        Authorization: "Bearer sometoken",
+        Accept: "application/vnd.docker.distribution.manifest.v2+json",
+      },
+    });
+    assert.equal(authed.headers.get("Cache-Control"), "private, no-store");
+
+    const anon = await request("https://mirror.example.com/v2/library/alpine/manifests/latest", {
+      headers: {
+        Accept: "application/vnd.docker.distribution.manifest.v2+json",
+      },
+    });
+    assert.equal(anon.headers.get("Cache-Control"), "public, max-age=300");
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
