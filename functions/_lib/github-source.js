@@ -176,6 +176,15 @@ function addGitHubSourceHeaders(response, upstreamUrl, cacheStatus = null) {
 }
 
 async function matchGitHubSourceCache(request, requestUrl, env) {
+  // Range requests must bypass the cache read. The cache only ever stores
+  // complete 200 responses (writes are skipped for Range requests), so
+  // serving a cached entry for a Range request would return the full body
+  // with status 200 instead of a 206 partial response, breaking resumable
+  // downloads. Go to the upstream instead, which answers Range correctly.
+  if (request.headers.has("Range")) {
+    return null;
+  }
+
   const cache = getGitHubSourceCache(request, env);
   if (!cache) {
     return null;
